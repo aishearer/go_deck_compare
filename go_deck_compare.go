@@ -1,8 +1,13 @@
+//TODO
+// Use a curency package instead of float32
+
 package main
 
 import (
 	"bufio"
 	"encoding/csv"
+	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -11,33 +16,34 @@ import (
 	"strings"
 )
 
-type Deck struct {
+type deck struct {
 	name    string
 	cardMap map[string]int
+	price   float32
 }
 
-type ComparisonResult struct {
+type comparisonResult struct {
 	deck1, deck2  string
 	priceInCommon float32
 }
 
-type ComparisonResults []ComparisonResult
+type comparisonResults []comparisonResult
 
-func (slice ComparisonResults) Len() int {
+func (slice comparisonResults) Len() int {
 	return len(slice)
 }
 
-func (slice ComparisonResults) Less(i, j int) bool {
+func (slice comparisonResults) Less(i, j int) bool {
 	return slice[i].priceInCommon < slice[j].priceInCommon
 }
 
-func (slice ComparisonResults) Swap(i, j int) {
+func (slice comparisonResults) Swap(i, j int) {
 	slice[i], slice[j] = slice[j], slice[i]
 }
 
-type CardPriceDatabase map[string]float32
+type cardPriceDatabase map[string]float32
 
-func (cardDb CardPriceDatabase) load(path string) error {
+func (cardDb cardPriceDatabase) load(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -63,9 +69,10 @@ func (cardDb CardPriceDatabase) load(path string) error {
 	return nil
 }
 
-func (cardDb CardPriceDatabase) getPrice(card string) float32 {
+func (cardDb cardPriceDatabase) getPrice(card string) float32 {
 	price, exists := cardDb[card]
 	if !exists {
+		fmt.Printf("Can't find %s in price list\n", card)
 		return 0.25
 	}
 	return price
@@ -98,8 +105,7 @@ func readDecklist(path string) (map[string]int, error) {
 
 	lines, err := readLines(path)
 	if err != nil {
-		//TODO something
-		fmt.Println("File error")
+		fmt.Printf("Error reading file %s\n", path)
 		return deckMap, err
 	}
 
@@ -108,11 +114,12 @@ func readDecklist(path string) (map[string]int, error) {
 			continue
 		}
 		split := strings.SplitN(line, " ", 2)
-		//TODO check split length
+		if len(split) != 2 {
+			return deckMap, errors.New("Error parsing line: " + line)
+		}
 		cards, err := strconv.Atoi(split[0])
 		if err != nil {
-			//TODO
-			fmt.Println("Error converting card number")
+			fmt.Printf("On line: %s\n --- Error reading card number: %s\n", line, split[0])
 			return deckMap, err
 		}
 		cardName := split[1]
@@ -122,8 +129,8 @@ func readDecklist(path string) (map[string]int, error) {
 	return deckMap, nil
 }
 
-func compareDecks(deck1 map[string]int, deck2 map[string]int, cardPriceDb CardPriceDatabase) float32 {
-	var priceInCommon float32 = 0
+func compareDecks(deck1 map[string]int, deck2 map[string]int, cardPriceDb cardPriceDatabase) float32 {
+	var priceInCommon float32
 
 	for cardName, deck1Number := range deck1 {
 		deck2Number, exists := deck2[cardName]
@@ -137,34 +144,68 @@ func compareDecks(deck1 map[string]int, deck2 map[string]int, cardPriceDb CardPr
 	return priceInCommon
 }
 
+func calculateDeckPrice(deck map[string]int, cardPriceDb cardPriceDatabase) float32 {
+	var total float32
+	for card, cardCount := range deck {
+		total += float32(cardCount) * cardPriceDb.getPrice(card)
+	}
+	return total
+}
+
+func compareEveryDeckTogether(decks []deck, priceDb cardPriceDatabase) comparisonResults {
+	results := comparisonResults{}
+	// For every combination of decks
+	for i, deck1 := range decks {
+		for _, deck2 := range decks[i+1:] {
+			priceInCommon := compareDecks(deck1.cardMap, deck2.cardMap, priceDb)
+			results = append(results, comparisonResult{deck1.name, deck2.name, priceInCommon})
+		}
+	}
+	return results
+}
+
+func ouputResults(results comparisonResults) {
+	sort.Sort(results)
+	for _, result := range results {
+		fmt.Printf("%f %s %s\n", result.priceInCommon, result.deck1, result.deck2)
+	}
+}
+
 func main() {
-	priceDb := CardPriceDatabase{}
-	err := priceDb.load("EveryCard_lithiumDucky_2017.April.20.csv")
+	var pathToCardPrice = flag.String("price-file", "card_prices.csv", "The path to the card price file")
+	var deckDirectory = flag.String("deck-dir", "./decks/", "The path to the directory containing the deck files")
+	var pathToCardCollection = flag.String("my-collection", "my_collection.dec", "The path to your card collection in .dec format")
+	flag.Parse()
+
+	priceDb := cardPriceDatabase{}
+	err := priceDb.load(*pathToCardPrice)
 	if err != nil {
 		fmt.Println("Error loading card price file: " + err.Error())
 		return
 	}
 
-	decks := []Deck{}
-	files, _ := ioutil.ReadDir("./decks")
+	decks := []deck{}
+	files, _ := ioutil.ReadDir(*deckDirectory)
 	for _, f := range files {
 		fileName := f.Name()
-		cardMap, _ := readDecklist("decks/" + fileName)
-		decks = append(decks, Deck{fileName, cardMap})
-	}
-
-	results := ComparisonResults{}
-	// For every combination of decks
-	for i, deck1 := range decks {
-		for _, deck2 := range decks[i+1:] {
-			priceInCommon := compareDecks(deck1.cardMap, deck2.cardMap, priceDb)
-			results = append(results, ComparisonResult{deck1.name, deck2.name, priceInCommon})
+		cardMap, err := readDecklist(*deckDirectory + fileName)
+		if err != nil {
+			return
 		}
+		deckPrice := calculateDeckPrice(cardMap, priceDb)
+		decks = append(decks, deck{fileName, cardMap, deckPrice})
 	}
 
-	sort.Sort(results)
-	for _, result := range results {
-		fmt.Printf("%f %s %s\n", result.priceInCommon, result.deck1, result.deck2)
+	cardCollection, err := readDecklist(*pathToCardCollection)
+	if err != nil {
+		return
 	}
 
+	results := comparisonResults{}
+	for _, deck := range decks {
+		priceInCommon := compareDecks(deck.cardMap, cardCollection, priceDb)
+		results = append(results, comparisonResult{"-", deck.name + " " + strconv.FormatFloat(float64(deck.price), 'f', 2, 32), priceInCommon})
+	}
+
+	ouputResults(results)
 }

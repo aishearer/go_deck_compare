@@ -8,6 +8,8 @@ reader = csv.reader(csv_file_in)
 rows = []
 for row in reader:
     if len(row) >= 2:
+        if len(row[2]) > 8:
+            row[2] = "0.01"
         rows.append([row[2].replace("$", ""), row[1]])
 
 csv_file_in.close()
